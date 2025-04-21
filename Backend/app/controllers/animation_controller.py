@@ -1,7 +1,7 @@
 import os
 import logging
 import traceback
-from ..services.manim_service import save_manim_code
+from ..services.manim_service import save_manim_code, generate_manim_code
 from ..services.video_service import create_video
 from ..services.voice_service import create_voiceover
 from ..langgraph.workflow import AnimationWorkflow
@@ -42,8 +42,7 @@ def create_animation(prompt):
                 script = f"Here is an explanation about {prompt}"
         else:
             # Use direct template approach
-            from ..services.manim_service import generate_manim_code
-            manim_code = generate_manim_code(prompt)
+            manim_code = generate_manim_code(prompt)  # This should use the LLM
             script = f"Here is an explanation about {prompt}"
             
         # Create video from code
@@ -77,4 +76,3 @@ def create_animation(prompt):
         raise Exception(f"Failed to create animation: {str(e)}")
     finally:
         logger.info("Animation creation process completed.")
-        

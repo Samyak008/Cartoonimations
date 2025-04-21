@@ -13,22 +13,171 @@ logger = logging.getLogger(__name__)
 SCENE_CLASS_NAME = "EducationalScene"
 
 def generate_manim_code(prompt):
-    """
-    Generate Manim code from a user prompt.
-    
-    Args:
-        prompt (str): User prompt describing the desired animation
-        
-    Returns:
-        str: Generated Manim code
-    """
+    """Generate Manim code from a user prompt using the Groq API."""
     logger.info(f"Generating Manim code for prompt: {prompt}")
     
-    # Escape single quotes in the prompt
-    title = prompt.replace("'", "\\'")
+    try:
+        # Import required libraries
+        from langchain_core.prompts import PromptTemplate
+        from langchain_core.output_parsers import StrOutputParser
+        from langchain_groq import ChatGroq
+        import os
+        import traceback
+        
+        # Get API key from environment
+        api_key = os.environ.get("GROQ_API_KEY")
+        if not api_key:
+            logger.error("GROQ_API_KEY not found in environment variables")
+            return get_fallback_template(title=prompt)
+        
+        # Create Groq LLM instance with llama3-70b model
+        llm = ChatGroq(
+            api_key=api_key,
+            model="llama3-70b-8192",
+            temperature=0.2  # Lower temperature for more predictable code
+        )
+        output_parser = StrOutputParser()
+        
+        # Create an enhanced prompt template for Manim code generation with examples
+        prompt_template = PromptTemplate.from_template(
+        """
+    You are a Manim animation code generator. 
+    Your ONLY output must be a single, complete, and syntactically valid Python script for Manim, with:
+    - Only one class: EducationalScene(Scene)
+    - All code inside def construct(self)
+    - No markdown, no explanations, no comments outside the code, no extra text.
+    - No blank lines at the start or end.
+    - Do not use triple backticks or any markdown formatting.
+
+    If you are unsure, output nothing.
+
+    Example:
+    from manim import *
+
+    class EducationalScene(Scene):
+        def construct(self):
+            title = Text("Gravity In Action").scale(0.8).to_edge(UP)
+            self.play(Write(title))
+            # ... more animation ...
+
+    Now, generate code for: {prompt}
+
+    Remember: Output ONLY valid Python code for Manim. No explanations, no markdown, no comments outside the code.
+    """
+        )
+        # Run the chain
+        chain = prompt_template | llm | output_parser
+        manim_code = chain.invoke({"prompt": prompt})
+        
+        # Additional validation to catch obvious issues
+        if manim_code and "EducationalScene" in manim_code and "def construct" in manim_code:
+            # Very basic validation that code looks reasonable
+            try:
+                ast.parse(manim_code)
+                logger.info("Successfully generated syntactically valid Manim code")
+                return manim_code
+            except SyntaxError as e:
+                logger.warning(f"Generated code has syntax errors: {e}")
+                # Log code with line numbers for debugging
+                for idx, line in enumerate(manim_code.splitlines(), 1):
+                    logger.warning(f"{idx:03d}: {line}")
+                # Try sanitization
+                try:
+                    sanitized_code = sanitize_manim_code(manim_code)
+                    ast.parse(sanitized_code)
+                    logger.info("Successfully fixed Manim code syntax issues")
+                    return sanitized_code
+                except Exception as e2:
+                    logger.error(f"Could not fix code syntax: {e2}")
+                    for idx, line in enumerate(sanitized_code.splitlines(), 1):
+                        logger.error(f"{idx:03d}: {line}")
+        else:
+            logger.warning("LLM generated incomplete or invalid code")
+    except Exception as e:
+        logger.error(f"Error generating Manim code with Groq: {e}")
+        logger.error(traceback.format_exc())
     
-    # Use the standardized scene class name
-    code = f"""
+    # Fallback to template if LLM fails
+    logger.warning("Using fallback template for Manim code")
+    return get_fallback_template(title=prompt)
+
+def sanitize_manim_code(code):
+    """
+    Aggressively sanitize LLM output to extract only valid Python Manim code.
+    """
+    import re
+
+    # Remove markdown code fences and any non-code lines at the start/end
+    code = re.sub(r"^```[a-zA-Z]*\n?", "", code)
+    code = re.sub(r"\n```$", "", code)
+    code = code.strip()
+    match = re.search(
+        r"(from manim import \*.*?)(class EducationalScene\(Scene\):.*?)(?:(?:class )|$)",
+        code,
+        re.DOTALL,
+    )
+    if match:
+        code = match.group(1) + "\n" + match.group(2)
+    return code
+
+    # Remove any lines before the first 'from manim import' or 'class'
+    lines = code.splitlines()
+    start = 0
+    for i, line in enumerate(lines):
+        if line.strip().startswith("from manim import") or line.strip().startswith("class "):
+            start = i
+            break
+    lines = lines[start:]
+
+    # Remove any trailing non-code lines
+    end = len(lines)
+    for i in range(len(lines) - 1, -1, -1):
+        if lines[i].strip() == "" or lines[i].strip().startswith("#"):
+            continue
+        if (
+            lines[i].strip().startswith("def ")
+            or lines[i].strip().startswith("class ")
+            or lines[i].strip().startswith("from ")
+            or lines[i].strip().startswith("import ")
+            or "=" in lines[i]
+            or lines[i].strip().endswith(":")
+        ):
+            end = i + 1
+            break
+    lines = lines[:end]
+
+    # Remove any markdown, explanations, or comments outside code
+    code = "\n".join(line for line in lines if not line.strip().startswith("```"))
+    code = re.sub(r"^#.*$", "", code, flags=re.MULTILINE)
+    code = code.strip()
+
+    # Ensure required import and class structure
+    if "from manim import" not in code:
+        code = "from manim import *\n\n" + code
+    if "class EducationalScene" not in code:
+        code += "\n\nclass EducationalScene(Scene):\n    def construct(self):\n        self.wait(1)\n"
+
+    return code
+ 
+def get_fallback_template(title="Educational Topic", animation_code=None):
+    """
+    Return a fallback Manim template that's guaranteed to work.
+    Args:
+        title (str): The title to display in the animation.
+        animation_code (str, optional): Custom animation code to insert in the construct method.
+    Returns:
+        str: Fallback Manim code
+    """
+    logger.info(f"Using fallback {SCENE_CLASS_NAME} template with title: {title}")
+    # Default animation if none provided
+    default_animation = """
+        # Simple animation
+        circle = Circle()
+        self.play(Create(circle))
+    """
+    animation_body = animation_code if animation_code else default_animation
+
+    return f"""
 from manim import *
 
 class {SCENE_CLASS_NAME}(Scene):
@@ -37,153 +186,7 @@ class {SCENE_CLASS_NAME}(Scene):
         title = Text("{title}").scale(0.8)
         title.to_edge(UP)
         self.play(Write(title))
-        
-        # Simple animation
-        circle = Circle()
-        self.play(Create(circle))
-        
-        # Wait at the end
-        self.wait(2)
-    """
-    
-    logger.info("Manim code generated successfully")
-    return code
-
-def sanitize_manim_code(code):
-    """
-    Sanitize and validate Manim code to ensure it will run properly.
-    
-    Args:
-        code (str): Manim code to sanitize
-        
-    Returns:
-        str: Sanitized Manim code
-    """
-    # Remove markdown code block syntax
-    code = re.sub(r'^```(?:python|manim)?\s*', '', code)
-    code = re.sub(r'\s*```$', '', code)
-    
-    # Remove any descriptive text at the beginning or end
-    lines = code.splitlines()
-    
-    # Find the start and end of actual Python code
-    first_code_line = 0
-    last_code_line = len(lines) - 1
-    
-    # Find first line that looks like Python code
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-        if stripped.startswith('from ') or stripped.startswith('import ') or stripped.startswith('class '):
-            first_code_line = i
-            break
-            
-    # Find last line of Python code (before any descriptive comments)
-    for i in range(len(lines) - 1, -1, -1):
-        stripped = lines[i].strip()
-        if not stripped:  # Skip empty lines
-            continue
-        # Check if this is a descriptive comment rather than code
-        if not stripped.startswith('#') and not (
-            stripped.startswith('import') or 
-            stripped.startswith('class') or 
-            stripped.startswith('def') or 
-            stripped.startswith('if') or 
-            '=' in stripped or 
-            stripped.endswith(':')
-        ):
-            if any(keyword in stripped.lower() for keyword in ['note', 'create', 'place', 'need', 'file']):
-                last_code_line = i - 1
-            else:
-                break
-    
-    # Extract only the Python code
-    code_lines = lines[first_code_line:last_code_line+1]
-    
-    # Remove any lines that reference external resources
-    code_lines = [line for line in code_lines if not any(x in line.lower() for x in [
-        'you\'ll need', 'place them', 'same directory', 'create the', 'download'
-    ])]
-    
-    # Replace unsupported elements with safe alternatives
-    clean_lines = []
-    for line in code_lines:
-        if "ImageMobject" in line:
-            # Replace image references with shapes
-            indent = len(line) - len(line.lstrip())
-            var_name = line.strip().split('=')[0].strip()
-            clean_lines.append(f"{' ' * indent}{var_name} = Circle(color=RED)")
-        elif "add_sound" in line or "play_sound" in line:
-            # Skip sound-related lines
-            continue
-        else:
-            clean_lines.append(line)
-    
-    # Reconstruct the code
-    clean_code = '\n'.join(clean_lines)
-    
-    # Ensure the scene class name is standardized
-    clean_code = re.sub(r'class\s+\w+\s*\(\s*Scene\s*\)', f'class {SCENE_CLASS_NAME}(Scene)', clean_code)
-    
-    # Add required imports if missing
-    if 'from manim import' not in clean_code:
-        clean_code = 'from manim import *\n\n' + clean_code
-    
-    # Add minimum scene structure if missing
-    if f'class {SCENE_CLASS_NAME}' not in clean_code:
-        clean_code += f'\n\nclass {SCENE_CLASS_NAME}(Scene):\n    def construct(self):\n        self.wait(1)\n'
-    
-    # Validate the Python syntax
-    try:
-        ast.parse(clean_code)
-        logger.info("Manim code validation successful")
-    except SyntaxError as e:
-        logger.warning(f"Syntax error in generated code: {e}")
-        # Use a reliable fallback template
-        clean_code = get_fallback_template()
-    
-    return clean_code
-
-def get_fallback_template():
-    """
-    Return a fallback Manim template that's guaranteed to work.
-    
-    Returns:
-        str: Fallback Manim code
-    """
-    logger.info(f"Using fallback {SCENE_CLASS_NAME} template")
-    return f"""
-from manim import *
-
-class {SCENE_CLASS_NAME}(Scene):
-    def construct(self):
-        # Title
-        title = Text("Pythagorean Theorem").scale(0.8)
-        title.to_edge(UP)
-        self.play(Write(title))
-        
-        # Create a right triangle
-        triangle = Polygon(
-            ORIGIN, 
-            RIGHT * 3, 
-            UP * 4, 
-            color=WHITE
-        )
-        self.play(Create(triangle))
-        
-        # Label the sides
-        a_label = Text("a", font_size=24).next_to(triangle, DOWN)
-        b_label = Text("b", font_size=24).next_to(triangle, RIGHT)
-        c_label = Text("c", font_size=24).next_to(
-            triangle.get_center() + UP * 0.5 + RIGHT * 0.5
-        )
-        
-        self.play(Write(a_label), Write(b_label), Write(c_label))
-        
-        # Show the formula
-        formula = MathTex(r"a^2 + b^2 = c^2")
-        formula.next_to(triangle, DOWN * 2)
-        self.play(Write(formula))
-        
+{animation_body}
         # Wait at the end
         self.wait(2)
     """
