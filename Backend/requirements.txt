@@ -1,0 +1,23 @@
+# Core dependencies
+flask==2.3.3
+flask-cors==4.0.0
+python-dotenv==1.0.0
+gunicorn==21.2.0
+
+# Animation
+manim==0.17.3
+numpy==1.25.2
+matplotlib==3.7.2
+
+# AI components
+langchain==0.1.0
+langgraph==0.0.19
+langchain_groq==0.1.1  # Added for Groq integration
+openai==0.28.0
+
+# Voice integration
+gtts==2.3.2
+pydub==0.25.1
+
+# Testing
+pytest==7.4.0
