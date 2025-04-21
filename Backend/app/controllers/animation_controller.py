@@ -1,6 +1,7 @@
 import os
 import logging
-from ..services.manim_service import generate_manim_code, save_manim_code
+import traceback
+from ..services.manim_service import save_manim_code
 from ..services.video_service import create_video
 from ..services.voice_service import create_voiceover
 from ..langgraph.workflow import AnimationWorkflow
@@ -11,55 +12,69 @@ logger = logging.getLogger(__name__)
 
 def create_animation(prompt):
     """
-    Create an educational animation from a prompt.
+    Create an educational animation from a user prompt.
     
     Args:
-        prompt (str): User prompt describing the desired animation
+        prompt (str): User prompt describing the animation
         
     Returns:
-        dict: Information about the generated animation, including file paths
+        dict: Animation details including video path, script, etc.
     """
-    logger.info(f"Creating animation for prompt: {prompt}")
-    
     try:
-        # Check if we should use the AI workflow (for more advanced animations)
-        use_ai_workflow = os.environ.get("USE_AI_WORKFLOW", "false").lower() == "true"
+        logger.info(f"Creating animation for prompt: {prompt}")
+        
+        # Check if we're using AI workflow
+        use_ai_workflow = os.environ.get("USE_AI_WORKFLOW", "true").lower() in ["true", "1", "yes"]
         
         if use_ai_workflow:
-            # Use LangGraph workflow for advanced animation generation
-            workflow = AnimationWorkflow()
-            workflow_result = workflow.run(prompt)
-            
-            # Extract results from workflow
-            manim_code = workflow_result["manim_code"]
-            script = workflow_result["script"]
-            
-            # Save the generated code to a file
-            code_file = save_manim_code(manim_code)
-            
-            # Generate the video from the code
-            video_path = create_video(manim_code)
-            
-            # Generate the voiceover from the script
-            audio_path = create_voiceover(script)
+            # Use LangGraph workflow
+            try:
+                workflow = AnimationWorkflow()
+                result = workflow.run(prompt)
+                
+                manim_code = result.get("manim_code", "")
+                script = result.get("script", "")
+            except Exception as e:
+                logger.error(f"Error in AI workflow: {e}")
+                logger.error(traceback.format_exc())
+                # Fallback to simple template
+                manim_code = f"# Failed to generate code, using template\nfrom manim import *\n\nclass EducationalScene(Scene):\n    def construct(self):\n        title = Text(\"{prompt}\").scale(0.8)\n        title.to_edge(UP)\n        self.play(Write(title))\n        self.wait(2)"
+                script = f"Here is an explanation about {prompt}"
         else:
-            # Use the simple approach for basic animations
-            # Step 1: Generate Manim code from the prompt
+            # Use direct template approach
+            from ..services.manim_service import generate_manim_code
             manim_code = generate_manim_code(prompt)
+            script = f"Here is an explanation about {prompt}"
             
-            # Step 2: Create video from the Manim code
+        # Create video from code
+        try:
             video_path = create_video(manim_code)
+            if not video_path or not os.path.exists(video_path):
+                raise FileNotFoundError("Failed to generate video file")
+        except Exception as e:
+            logger.error(f"Error creating video: {e}")
+            logger.error(traceback.format_exc())
+            raise Exception(f"Failed to generate video: {str(e)}")
             
-            # Step 3: Generate voiceover for the animation
-            audio_path = create_voiceover(prompt)
-        
-        # For now, we're just returning the paths without combining audio and video
+        # Create voiceover from script
+        try:
+            audio_path = create_voiceover(script)
+        except Exception as e:
+            logger.error(f"Error creating voiceover: {e}")
+            logger.error(traceback.format_exc())
+            audio_path = None
+            
         return {
-            "status": "success",
             "video_path": video_path,
             "audio_path": audio_path,
-            "message": "Animation created successfully"
+            "script": script,
+            "prompt": prompt
         }
+        
     except Exception as e:
-        logger.error(f"Error creating animation: {str(e)}")
-        raise
+        logger.error(f"Error creating animation: {e}")
+        logger.error(traceback.format_exc())
+        raise Exception(f"Failed to create animation: {str(e)}")
+    finally:
+        logger.info("Animation creation process completed.")
+        

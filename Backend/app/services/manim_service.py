@@ -9,12 +9,12 @@ import textwrap
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Define a constant for the scene class name to ensure consistency
+SCENE_CLASS_NAME = "EducationalScene"
+
 def generate_manim_code(prompt):
     """
     Generate Manim code from a user prompt.
-    
-    In Phase 1, this is a simple template-based approach.
-    In Phase 3, this will be replaced with LLM-generated code.
     
     Args:
         prompt (str): User prompt describing the desired animation
@@ -24,16 +24,14 @@ def generate_manim_code(prompt):
     """
     logger.info(f"Generating Manim code for prompt: {prompt}")
     
-    # For Phase 1, we'll use a simple template
-    # This will be replaced with an LLM call in Phase 3
-    
-    # Simple example: create a scene with a title and a circle
+    # Escape single quotes in the prompt
     title = prompt.replace("'", "\\'")
     
+    # Use the standardized scene class name
     code = f"""
 from manim import *
 
-class EducationalScene(Scene):
+class {SCENE_CLASS_NAME}(Scene):
     def construct(self):
         # Title
         title = Text("{title}").scale(0.8)
@@ -61,12 +59,14 @@ def sanitize_manim_code(code):
     Returns:
         str: Sanitized Manim code
     """
-    # Remove any markdown code blocks and language specifiers
-    code = re.sub(r'^```(?:python|manim)?\n', '', code)
-    code = re.sub(r'\n```$', '', code)
+    # Remove markdown code block syntax
+    code = re.sub(r'^```(?:python|manim)?\s*', '', code)
+    code = re.sub(r'\s*```$', '', code)
     
-    # Remove any descriptive text at the beginning or end that isn't Python code
-    lines = code.split('\n')
+    # Remove any descriptive text at the beginning or end
+    lines = code.splitlines()
+    
+    # Find the start and end of actual Python code
     first_code_line = 0
     last_code_line = len(lines) - 1
     
@@ -80,31 +80,39 @@ def sanitize_manim_code(code):
     # Find last line of Python code (before any descriptive comments)
     for i in range(len(lines) - 1, -1, -1):
         stripped = lines[i].strip()
-        # Skip empty lines
-        if not stripped:
+        if not stripped:  # Skip empty lines
             continue
-        # If this looks like a descriptive comment not a code comment, exclude it
-        if not stripped.startswith('#') and not stripped.startswith('import') and not stripped.startswith('class') and not stripped.startswith('def') and not stripped.startswith('if') and '=' not in stripped and stripped[-1] != ':':
+        # Check if this is a descriptive comment rather than code
+        if not stripped.startswith('#') and not (
+            stripped.startswith('import') or 
+            stripped.startswith('class') or 
+            stripped.startswith('def') or 
+            stripped.startswith('if') or 
+            '=' in stripped or 
+            stripped.endswith(':')
+        ):
             if any(keyword in stripped.lower() for keyword in ['note', 'create', 'place', 'need', 'file']):
                 last_code_line = i - 1
             else:
                 break
-                
-    # Extract just the Python code portion
+    
+    # Extract only the Python code
     code_lines = lines[first_code_line:last_code_line+1]
     
-    # Skip any lines that are describing Manim requirements
-    code_lines = [line for line in code_lines if not any(x in line.lower() for x in ['you\'ll need', 'place them', 'same directory'])]
+    # Remove any lines that reference external resources
+    code_lines = [line for line in code_lines if not any(x in line.lower() for x in [
+        'you\'ll need', 'place them', 'same directory', 'create the', 'download'
+    ])]
     
-    # Replace image references with dummy implementations
+    # Replace unsupported elements with safe alternatives
     clean_lines = []
     for line in code_lines:
         if "ImageMobject" in line:
-            # Get the indentation
+            # Replace image references with shapes
             indent = len(line) - len(line.lstrip())
-            # Create a Circle instead of an ImageMobject
-            clean_lines.append(' ' * indent + line.strip().split('=')[0] + '= Circle(color=RED)')
-        elif "add_sound" in line:
+            var_name = line.strip().split('=')[0].strip()
+            clean_lines.append(f"{' ' * indent}{var_name} = Circle(color=RED)")
+        elif "add_sound" in line or "play_sound" in line:
             # Skip sound-related lines
             continue
         else:
@@ -113,28 +121,40 @@ def sanitize_manim_code(code):
     # Reconstruct the code
     clean_code = '\n'.join(clean_lines)
     
-    # Make sure the Scene class name is consistent
-    clean_code = re.sub(r'class\s+(\w+)\s*\(\s*Scene\s*\)', 'class EducationalScene(Scene)', clean_code)
+    # Ensure the scene class name is standardized
+    clean_code = re.sub(r'class\s+\w+\s*\(\s*Scene\s*\)', f'class {SCENE_CLASS_NAME}(Scene)', clean_code)
     
-    # Ensure the code has the minimum required imports
+    # Add required imports if missing
     if 'from manim import' not in clean_code:
         clean_code = 'from manim import *\n\n' + clean_code
     
-    # If there's no class definition at all, create a minimal one
-    if 'class EducationalScene' not in clean_code:
-        clean_code += '\n\nclass EducationalScene(Scene):\n    def construct(self):\n        self.wait(1)\n'
+    # Add minimum scene structure if missing
+    if f'class {SCENE_CLASS_NAME}' not in clean_code:
+        clean_code += f'\n\nclass {SCENE_CLASS_NAME}(Scene):\n    def construct(self):\n        self.wait(1)\n'
     
-    # Try to validate the Python syntax
+    # Validate the Python syntax
     try:
         ast.parse(clean_code)
         logger.info("Manim code validation successful")
     except SyntaxError as e:
         logger.warning(f"Syntax error in generated code: {e}")
-        # Create a minimal valid scene as fallback
-        clean_code = """
+        # Use a reliable fallback template
+        clean_code = get_fallback_template()
+    
+    return clean_code
+
+def get_fallback_template():
+    """
+    Return a fallback Manim template that's guaranteed to work.
+    
+    Returns:
+        str: Fallback Manim code
+    """
+    logger.info(f"Using fallback {SCENE_CLASS_NAME} template")
+    return f"""
 from manim import *
 
-class EducationalScene(Scene):
+class {SCENE_CLASS_NAME}(Scene):
     def construct(self):
         # Title
         title = Text("Pythagorean Theorem").scale(0.8)
@@ -160,16 +180,13 @@ class EducationalScene(Scene):
         self.play(Write(a_label), Write(b_label), Write(c_label))
         
         # Show the formula
-        formula = MathTex("a^2 + b^2 = c^2")
+        formula = MathTex(r"a^2 + b^2 = c^2")
         formula.next_to(triangle, DOWN * 2)
         self.play(Write(formula))
         
         # Wait at the end
         self.wait(2)
-        """
-        logger.info("Using fallback Pythagorean theorem animation template")
-    
-    return clean_code
+    """
 
 def save_manim_code(code, filename=None):
     """
@@ -182,23 +199,32 @@ def save_manim_code(code, filename=None):
     Returns:
         str: Path to the saved file
     """
+    # Create a consistent temporary file path if not provided
     if not filename:
         temp_dir = tempfile.gettempdir()
-        filename = os.path.join(temp_dir, "animation_scene.py")
+        filename = os.path.abspath(os.path.join(temp_dir, "animation_scene.py"))
     
     # Sanitize the code before saving
     sanitized_code = sanitize_manim_code(code)
-        
+    
     try:
-        # Use UTF-8 encoding to handle special characters like Greek symbols
+        # Use UTF-8 encoding for all file operations
         with open(filename, "w", encoding="utf-8") as f:
             f.write(sanitized_code)
         logger.info(f"Saved Manim code to {filename}")
     except Exception as e:
         logger.error(f"Error saving Manim code: {e}")
-        # Fallback: If there are still encoding issues, strip or replace problematic characters
-        logger.info("Attempting to save with problematic characters replaced")
-        with open(filename, "w", encoding="utf-8", errors="replace") as f:
-            f.write(sanitized_code)
-        
+        # Fallback with error handling for encoding issues
+        try:
+            # Try with replacement strategy for problematic characters
+            with open(filename, "w", encoding="utf-8", errors="replace") as f:
+                f.write(sanitized_code)
+            logger.info(f"Saved Manim code with character replacement at {filename}")
+        except Exception as e2:
+            logger.error(f"Critical error saving code: {e2}")
+            # Last resort: save the fallback template
+            with open(filename, "w", encoding="utf-8", errors="ignore") as f:
+                f.write(get_fallback_template())
+            logger.warning(f"Saved fallback template to {filename}")
+    
     return filename
